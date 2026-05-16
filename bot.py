@@ -15,6 +15,7 @@ TAVILY_KEY = os.getenv("TAVILY_KEY", "ВСТАВЬ_TAVILY_КЛЮЧ")
 deepseek = OpenAI(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com")
 groq_client = OpenAI(api_key=GROQ_KEY, base_url="https://api.groq.com/openai/v1")
 import httpx as http
+import urllib.parse
 
 conn = sqlite3.connect("brain.db")
 conn.execute("""CREATE TABLE IF NOT EXISTS messages
@@ -163,12 +164,33 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🎤 Распознал: {text}")
     reply = await ask_jarvis(user_id, text)
     await update.message.reply_text(reply)
-
+async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ALLOWED_USERS:
+        await update.message.reply_text("⛔ У тебя нет доступа.")
+        return
+    
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text("Напиши: /image описание картинки")
+        return
+    
+    await update.message.reply_text("🎨 Генерирую картинку...")
+    
+    encoded = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
+    
+    await context.bot.send_photo(
+        chat_id=update.effective_chat.id,
+        photo=url,
+        caption=f"🎨 {prompt}"
+    )
 app = Application.builder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("save", save_note))
 app.add_handler(CommandHandler("notes", show_notes))
 app.add_handler(CommandHandler("clear", clear_history))
+app.add_handler(CommandHandler("image", generate_image))
 app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 app.add_handler(MessageHandler(
     filters.TEXT & ~filters.COMMAND, handle_message
