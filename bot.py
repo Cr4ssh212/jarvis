@@ -9,9 +9,11 @@ from telegram.ext import (Application, MessageHandler,
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВСТАВЬ_ТОКЕН")
 DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY", "ВСТАВЬ_DEEPSEEK_КЛЮЧ")
 GROQ_KEY = os.getenv("GROQ_KEY", "ВСТАВЬ_GROQ_КЛЮЧ")
+TAVILY_KEY = os.getenv("TAVILY_KEY", "ВСТАВЬ_TAVILY_КЛЮЧ")
 
 deepseek = OpenAI(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com")
 groq_client = OpenAI(api_key=GROQ_KEY, base_url="https://api.groq.com/openai/v1")
+import httpx as http
 
 conn = sqlite3.connect("brain.db")
 conn.execute("""CREATE TABLE IF NOT EXISTS messages
@@ -37,19 +39,59 @@ def save_message(user_id, role, content):
     )
     conn.commit()
 
+async def search_web(query: str) -> str:
+    async with http.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": TAVILY_KEY,
+                "query": query,
+                "max_results": 3,
+                "include_answer": True
+            }
+        )
+        data = resp.json()
+        if data.get("answer"):
+            return f"🌐 {data['answer']}"
+        results = data.get("results", [])
+        if not results:
+            return "Ничего не нашёл."
+        text = "🌐 Результаты поиска:\n\n"
+        for r in results[:3]:
+            text += f"• {r['title']}\n{r['content'][:200]}...\n\n"
+        return text
+
 async def ask_jarvis(user_id, text):
     save_message(user_id, "user", text)
+    
+    search_keywords = ["найди", "поищи", "что такое", "кто такой", 
+                       "погода", "новости", "курс", "цена", "когда", 
+                       "где", "search", "find", "what is"]
+    
+    needs_search = any(kw in text.lower() for kw in search_keywords)
+    
+    search_result = ""
+    if needs_search:
+        search_result = await search_web(text)
+    
+    messages = [
+        {"role": "system", "content": 
+         "Ты умный личный помощник Джарвис. "
+         "Отвечай кратко и по делу. "
+         "Говори на языке пользователя. "
+         + (f"Данные из интернета: {search_result}" if search_result else "")
+        },
+    ] + get_history(user_id)
+    
     response = deepseek.chat.completions.create(
         model="deepseek-chat",
-        messages=[
-            {"role": "system", "content":
-             "Ты умный личный помощник Джарвис. "
-             "Отвечай кратко и по делу. "
-             "Говори на языке пользователя."},
-        ] + get_history(user_id)
+        messages=messages
     )
     reply = response.choices[0].message.content
     save_message(user_id, "assistant", reply)
+    
+    if search_result:
+        return search_result + "\n\n💬 " + reply
     return reply
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
